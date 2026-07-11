@@ -1,15 +1,16 @@
 /**
- * webhook-line — LINE Messaging API webhook（画像解析 / チャット / 予定一括登録）
+ * webhook-line — LINE Messaging API webhook（画像解析 / チャット / 予定一括登録 / ブック登録）
  *
- * このEdge Functionは3つのユーザーフローを1つのwebhookで受け持つ：
+ * このEdge Functionは4つのユーザーフローを1つのwebhookで受け持つ：
  *   1. 画像解析（P1）        : プリント画像を送るとClaudeが構造化して prints/print_events に保存
  *   2. 画像指示確認（P3）     : 画像受信後すぐ解析せず「指示あり/なし」を確認してから解析する
  *   3. 予定一括登録           : リッチメニュー起点でテキストから複数予定をパースし print_events に登録
+ *   4. ブック登録（P5）      : リッチメニュー起点で複数画像を1つのブックとしてまとめて登録する
  *
- * 2と3はどちらも複数回のLINEメッセージ往復が必要なため、DBの一時セッションテーブル
- * （pending_image_sessions / pending_registrations）でユーザーごとの会話状態を保持する。
+ * 2・3・4はどれも複数回のLINEメッセージ往復が必要なため、DBの一時セッションテーブル
+ * （pending_image_sessions / pending_registrations / pending_book_sessions）でユーザーごとの会話状態を保持する。
  * セッションはユーザーごとに最新1件のみ（line_user_idにUNIQUE制約＋upsert）、
- * 5分TTL（expires_at）を過ぎたセッションは黙って無効化され、通常フローに自然に戻る。
+ * TTL（expires_at）を過ぎたセッションは黙って無効化され、通常フローに自然に戻る。
  */
 import { createClient } from "npm:@supabase/supabase-js@2"
 import Anthropic from "npm:@anthropic-ai/sdk"
@@ -39,6 +40,12 @@ const INSTRUCTION_NO  = "instruction_no"
 const BULK_REGISTER_START        = "bulk_register_start"
 const BULK_REGISTER_CONFIRM_YES  = "bulk_register_confirm_yes"
 const BULK_REGISTER_CONFIRM_NO   = "bulk_register_confirm_no"
+
+// Postback data namespace (ブック登録)
+const BOOK_REGISTER_START = "book_register_start"
+
+const BOOK_MAX_PAGES     = 10
+const BOOK_SESSION_TTL_MS = 10 * 60 * 1000 // ブックは複数枚撮影しながら送るため他フローより長めの10分
 
 // ---------------------------------------------------------------------------
 // LINE utilities
@@ -225,57 +232,68 @@ function buildReplyText(parsed: Record<string, unknown>): string {
 }
 
 // ---------------------------------------------------------------------------
-// Shared: analyze an already-uploaded image and reply with the result
+// Shared: analyze an already-uploaded image and persist prints/print_events
 //
 // P3フローの2つの出口（handlePostbackの「指示なし」/ handleTextでの「指示あり」後の
-// テキスト回答）の両方からここを呼ぶ。呼び出し側でセッション削除を済ませてから呼ぶこと。
+// テキスト回答）と、ブック登録（finalizeBook）の複数ページ解析から共通で呼ぶ。
+// bookIdを渡すとprints.book_idにセットする（単発プリントの場合は省略）。
 // ---------------------------------------------------------------------------
+async function analyzeAndSavePrint(
+  imageUrl: string,
+  instruction?: string,
+  bookId?: string,
+): Promise<Record<string, unknown>> {
+  const { buffer, contentType } = await fetchImageFromUrl(imageUrl)
+  const parsed = await analyzePrint(buffer, contentType, instruction)
+
+  // Derive date/deadline from events array for backward compat
+  type ParsedEvent = { date: string; time?: string | null; title: string; is_deadline: boolean }
+  const events = (parsed.events as ParsedEvent[] | undefined) ?? []
+  const firstDate     = events.find((e) => !e.is_deadline)?.date ?? null
+  const firstDeadline = events.find((e) =>  e.is_deadline)?.date ?? null
+
+  // Save structured data to DB
+  const { data: printRow, error: dbError } = await supabase.from("prints").insert({
+    image_url:     imageUrl,
+    target_person: parsed.target_person ?? null,
+    category:      ["予定", "持ち物", "提出物", "その他"].includes(parsed.category as string)
+                     ? parsed.category
+                     : "その他",
+    date:          firstDate,
+    deadline:      firstDeadline,
+    content:       parsed.content ?? null,
+    raw_text:      JSON.stringify(parsed),
+    book_id:       bookId ?? null,
+  }).select("id").single()
+  if (dbError) throw dbError
+
+  // Insert each event into print_events
+  if (events.length > 0 && printRow?.id) {
+    const eventRows = events
+      .filter((e) => e.date && e.title)
+      .map((e) => ({
+        print_id:    printRow.id,
+        event_date:  e.date,
+        event_time:  e.time ?? null,
+        title:       e.title,
+        is_deadline: e.is_deadline ?? false,
+      }))
+    if (eventRows.length > 0) {
+      const { error: eventsError } = await supabase.from("print_events").insert(eventRows)
+      if (eventsError) console.error("[analyzeAndSavePrint] print_events insert error:", eventsError)
+    }
+  }
+
+  return parsed
+}
+
 async function analyzeAndReply(
   replyToken: string,
   imageUrl: string,
   instruction?: string,
 ): Promise<void> {
   try {
-    const { buffer, contentType } = await fetchImageFromUrl(imageUrl)
-    const parsed = await analyzePrint(buffer, contentType, instruction)
-
-    // Derive date/deadline from events array for backward compat
-    type ParsedEvent = { date: string; time?: string | null; title: string; is_deadline: boolean }
-    const events = (parsed.events as ParsedEvent[] | undefined) ?? []
-    const firstDate     = events.find((e) => !e.is_deadline)?.date ?? null
-    const firstDeadline = events.find((e) =>  e.is_deadline)?.date ?? null
-
-    // Save structured data to DB
-    const { data: printRow, error: dbError } = await supabase.from("prints").insert({
-      image_url:     imageUrl,
-      target_person: parsed.target_person ?? null,
-      category:      ["予定", "持ち物", "提出物", "その他"].includes(parsed.category as string)
-                       ? parsed.category
-                       : "その他",
-      date:          firstDate,
-      deadline:      firstDeadline,
-      content:       parsed.content ?? null,
-      raw_text:      JSON.stringify(parsed),
-    }).select("id").single()
-    if (dbError) throw dbError
-
-    // Insert each event into print_events
-    if (events.length > 0 && printRow?.id) {
-      const eventRows = events
-        .filter((e) => e.date && e.title)
-        .map((e) => ({
-          print_id:    printRow.id,
-          event_date:  e.date,
-          event_time:  e.time ?? null,
-          title:       e.title,
-          is_deadline: e.is_deadline ?? false,
-        }))
-      if (eventRows.length > 0) {
-        const { error: eventsError } = await supabase.from("print_events").insert(eventRows)
-        if (eventsError) console.error("[analyzeAndReply] print_events insert error:", eventsError)
-      }
-    }
-
+    const parsed = await analyzeAndSavePrint(imageUrl, instruction)
     await replyLine(replyToken, [textMessage(buildReplyText(parsed))])
   } catch (err) {
     console.error("[analyzeAndReply]", err)
@@ -545,6 +563,167 @@ async function handleBulkRegisterConfirm(
 }
 
 // ---------------------------------------------------------------------------
+// Book registration (rich menu → 複数画像収集 → タイトル → 一括解析)
+//
+// pending_book_sessions.status の状態遷移:
+//   collecting     -- リッチメニュー「ブックで登録」押下直後。画像を受信するたびimage_urlsに追記
+//   awaiting_title -- 「完了」受信 or 上限枚数到達。次のテキストをタイトルとして採用する
+// ---------------------------------------------------------------------------
+type PendingBookSession = {
+  id:         string
+  image_urls: string[]
+  status:     "collecting" | "awaiting_title"
+}
+
+// リッチメニュー「ブックで登録」postback受信時のエントリポイント。
+// 既存セッションは無条件で上書きし、collectingから再スタートする。
+async function handleBookRegisterStart(replyToken: string, userId: string): Promise<void> {
+  const expiresAt = new Date(Date.now() + BOOK_SESSION_TTL_MS).toISOString()
+  const { error } = await supabase
+    .from("pending_book_sessions")
+    .upsert(
+      { line_user_id: userId, image_urls: [], status: "collecting", expires_at: expiresAt },
+      { onConflict: "line_user_id" },
+    )
+
+  if (error) {
+    console.error("[handleBookRegisterStart]", error)
+    await replyLine(replyToken, [textMessage("エラーが発生しました。もう一度試してください。")])
+    return
+  }
+
+  await replyLine(
+    replyToken,
+    [textMessage(`画像を送ってください（最大${BOOK_MAX_PAGES}枚）。送り終わったら「完了」と送ってください。`)],
+  )
+}
+
+// pending_book_sessionsがcollecting中の画像受信を処理する（画像はhandleImage側でアップロード済み）。
+async function handleBookImage(
+  replyToken: string,
+  session: PendingBookSession,
+  imageUrl: string,
+): Promise<void> {
+  const imageUrls = [...session.image_urls, imageUrl]
+  const expiresAt = new Date(Date.now() + BOOK_SESSION_TTL_MS).toISOString()
+  const reachedLimit = imageUrls.length >= BOOK_MAX_PAGES
+
+  const { error } = await supabase
+    .from("pending_book_sessions")
+    .update({
+      image_urls: imageUrls,
+      status:     reachedLimit ? "awaiting_title" : "collecting",
+      expires_at: expiresAt,
+    })
+    .eq("id", session.id)
+
+  if (error) {
+    console.error("[handleBookImage]", error)
+    await replyLine(replyToken, [textMessage("エラーが発生しました。もう一度試してください。")])
+    return
+  }
+
+  if (reachedLimit) {
+    await replyLine(
+      replyToken,
+      [textMessage(`上限の${BOOK_MAX_PAGES}枚に達しました。このブックのタイトルを教えてください（例：夏休みの栞）`)],
+    )
+    return
+  }
+
+  await replyLine(replyToken, [textMessage(`${imageUrls.length}枚目を受信しました（最大${BOOK_MAX_PAGES}枚）`)])
+}
+
+// pending_book_sessionsがcollecting／awaiting_title中のテキスト受信を処理する。
+async function handleBookText(
+  replyToken: string,
+  text: string,
+  session: PendingBookSession,
+): Promise<void> {
+  if (text === "キャンセル") {
+    await supabase.from("pending_book_sessions").delete().eq("id", session.id)
+    await replyLine(replyToken, [textMessage("ブック登録をキャンセルしました。")])
+    return
+  }
+
+  if (session.status === "awaiting_title") {
+    await finalizeBook(session, text, replyToken)
+    return
+  }
+
+  // status === "collecting"
+  if (text !== "完了") {
+    await replyLine(
+      replyToken,
+      [textMessage(`画像を送ってください（最大${BOOK_MAX_PAGES}枚）。送り終わったら「完了」と送ってください。`)],
+    )
+    return
+  }
+
+  if (session.image_urls.length === 0) {
+    await replyLine(replyToken, [textMessage("まだ画像が届いていません。")])
+    return
+  }
+
+  const expiresAt = new Date(Date.now() + BOOK_SESSION_TTL_MS).toISOString()
+  const { error } = await supabase
+    .from("pending_book_sessions")
+    .update({ status: "awaiting_title", expires_at: expiresAt })
+    .eq("id", session.id)
+
+  if (error) {
+    console.error("[handleBookText]", error)
+    await replyLine(replyToken, [textMessage("エラーが発生しました。もう一度試してください。")])
+    return
+  }
+
+  await replyLine(replyToken, [textMessage("このブックのタイトルを教えてください（例：夏休みの栞）")])
+}
+
+// タイトル確定後の仕上げ処理：print_booksを作成し、収集済みの各ページを順に解析・保存する。
+// 1ページの解析失敗で全体を止めず、成否件数を集計して最後に1通で返信する。
+async function finalizeBook(
+  session: PendingBookSession,
+  title: string,
+  replyToken: string,
+): Promise<void> {
+  const { data: bookRow, error: bookError } = await supabase
+    .from("print_books")
+    .insert({ title })
+    .select("id")
+    .single()
+
+  if (bookError || !bookRow) {
+    console.error("[finalizeBook] print_books insert error", bookError)
+    await supabase.from("pending_book_sessions").delete().eq("id", session.id)
+    await replyLine(replyToken, [textMessage("ブックの登録中にエラーが発生しました。もう一度お試しください。")])
+    return
+  }
+
+  const bookId = bookRow.id as string
+  let successCount = 0
+  let failureCount = 0
+
+  for (const imageUrl of session.image_urls) {
+    try {
+      await analyzeAndSavePrint(imageUrl, undefined, bookId)
+      successCount++
+    } catch (err) {
+      console.error("[finalizeBook] page analyze error", err)
+      failureCount++
+    }
+  }
+
+  await supabase.from("pending_book_sessions").delete().eq("id", session.id)
+
+  const lines = [`📚 ブック『${title}』に${successCount}件登録しました`]
+  if (failureCount > 0) lines.push(`（${failureCount}件は解析に失敗しました）`)
+  lines.push("", "👉 確認する", `${WEB_APP_URL}/books/${bookId}`)
+
+  await replyLine(replyToken, [textMessage(lines.join("\n"))])
+}
+
+// ---------------------------------------------------------------------------
 // Event handlers
 // ---------------------------------------------------------------------------
 
@@ -571,6 +750,25 @@ async function handleImage(event: LineEvent): Promise<void> {
 
     const { data: { publicUrl } } = supabase.storage.from("prints").getPublicUrl(filePath)
 
+    // ①ブック収集中セッションがあれば画像をブックに追加する（P5）
+    const { data: bookSession, error: bookSessionError } = await supabase
+      .from("pending_book_sessions")
+      .select("id, image_urls, status")
+      .eq("line_user_id", userId)
+      .eq("status", "collecting")
+      .gt("expires_at", new Date().toISOString())
+      .maybeSingle()
+
+    if (bookSessionError) {
+      console.error("[handleImage] pending_book_sessions lookup error", bookSessionError)
+    }
+
+    if (bookSession) {
+      await handleBookImage(replyToken, bookSession as PendingBookSession, publicUrl)
+      return
+    }
+
+    // ②既存の画像指示確認フロー（P3）へ：pending_image_sessionsを作成
     // Replace any previous pending session for this user (upsert on line_user_id)
     const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString()
     const { error: sessionError } = await supabase
@@ -597,6 +795,11 @@ async function handlePostback(event: LineEvent): Promise<void> {
   const replyToken = event.replyToken as string
   const userId     = event.source.userId as string
   const data       = event.postback?.data as string | undefined
+
+  if (data === BOOK_REGISTER_START) {
+    await handleBookRegisterStart(replyToken, userId)
+    return
+  }
 
   if (data === BULK_REGISTER_START) {
     await handleBulkRegisterStart(replyToken, userId)
@@ -696,8 +899,24 @@ async function handleText(event: LineEvent): Promise<void> {
   const question   = event.message.text as string
   const userId     = event.source.userId as string
 
-  // テキスト受信時の判定優先順位: ①予定一括登録セッション → ②P3画像指示待ちセッション → ③通常チャット
-  // どちらのセッションもTTL付きで、期限切れなら該当なし（次の優先順位に自然にフォールスルー）として扱われる。
+  // テキスト受信時の判定優先順位: ①ブック登録セッション → ②予定一括登録セッション → ③P3画像指示待ちセッション → ④通常チャット
+  // どのセッションもTTL付きで、期限切れなら該当なし（次の優先順位に自然にフォールスルー）として扱われる。
+  const { data: bookSession, error: bookSessionError } = await supabase
+    .from("pending_book_sessions")
+    .select("id, image_urls, status")
+    .eq("line_user_id", userId)
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle()
+
+  if (bookSessionError) {
+    console.error("[handleText] pending_book_sessions lookup error", bookSessionError)
+  }
+
+  if (bookSession) {
+    await handleBookText(replyToken, question, bookSession as PendingBookSession)
+    return
+  }
+
   const { data: regSession, error: regError } = await supabase
     .from("pending_registrations")
     .select("id, status, draft_events, clarification_context")

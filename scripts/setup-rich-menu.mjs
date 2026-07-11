@@ -38,15 +38,17 @@ if (!TOKEN) {
 const W = 2500
 const H = 843
 
-// 3等分（最後の列で端数を吸収）
-const COL_W    = Math.floor(W / 3)
+// 4等分（最後の列で端数を吸収）
+const COL_W    = Math.floor(W / 4)
 const COL1_X   = 0
 const COL2_X   = COL_W
 const COL3_X   = COL_W * 2
-const COL3_W   = W - COL3_X
+const COL4_X   = COL_W * 3
+const COL4_W   = W - COL4_X
 const COL1_MID = COL_W / 2
 const COL2_MID = COL_W + COL_W / 2
-const COL3_MID = COL3_X + COL3_W / 2
+const COL3_MID = COL_W * 2 + COL_W / 2
+const COL4_MID = COL4_X + COL4_W / 2
 
 const svg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -62,20 +64,28 @@ const svg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
       <stop offset="0%" stop-color="#F59E0B"/>
       <stop offset="100%" stop-color="#D97706"/>
     </linearGradient>
+    <linearGradient id="bookGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#6D28D9"/>
+    </linearGradient>
   </defs>
 
-  <!-- Calendar button (left) -->
+  <!-- Calendar button -->
   <rect x="0" y="0" width="${COL_W - 6}" height="${H}" fill="url(#calGrad)"/>
 
-  <!-- Chat button (middle) -->
+  <!-- Chat button -->
   <rect x="${COL2_X + 6}" y="0" width="${COL_W - 12}" height="${H}" fill="url(#chatGrad)"/>
 
-  <!-- Register button (right) -->
-  <rect x="${COL3_X + 6}" y="0" width="${COL3_W - 6}" height="${H}" fill="url(#regGrad)"/>
+  <!-- Register button -->
+  <rect x="${COL3_X + 6}" y="0" width="${COL_W - 12}" height="${H}" fill="url(#regGrad)"/>
+
+  <!-- Book button -->
+  <rect x="${COL4_X + 6}" y="0" width="${COL4_W - 6}" height="${H}" fill="url(#bookGrad)"/>
 
   <!-- Dividers -->
   <rect x="${COL_W - 6}" y="0" width="12" height="${H}" fill="#f8fafc"/>
   <rect x="${COL3_X - 6}" y="0" width="12" height="${H}" fill="#f8fafc"/>
+  <rect x="${COL4_X - 6}" y="0" width="12" height="${H}" fill="#f8fafc"/>
 
   <!-- Calendar icon + label -->
   <text x="${COL1_MID}" y="${H / 2 - 60}" text-anchor="middle"
@@ -97,6 +107,13 @@ const svg = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
   <text x="${COL3_MID}" y="${H / 2 + 120}" text-anchor="middle"
         font-size="100" font-family="'Hiragino Sans', 'Noto Sans CJK JP', sans-serif"
         font-weight="bold" fill="white">予定登録</text>
+
+  <!-- Book icon + label -->
+  <text x="${COL4_MID}" y="${H / 2 - 60}" text-anchor="middle"
+        font-size="160" font-family="serif" fill="white" opacity="0.95">&#x1F4DA;</text>
+  <text x="${COL4_MID}" y="${H / 2 + 120}" text-anchor="middle"
+        font-size="100" font-family="'Hiragino Sans', 'Noto Sans CJK JP', sans-serif"
+        font-weight="bold" fill="white">ブックで登録</text>
 </svg>`
 
 const imgPath = join(__dir, 'rich-menu.png')
@@ -145,8 +162,12 @@ const menu = await lineApi('POST', '/richmenu', {
       action: { type: 'uri', uri: `${APP_URL}/chat`, label: 'チャット' },
     },
     {
-      bounds: { x: COL3_X, y: 0, width: COL3_W, height: H },
+      bounds: { x: COL3_X, y: 0, width: COL_W, height: H },
       action: { type: 'postback', label: '予定登録', data: 'bulk_register_start' },
+    },
+    {
+      bounds: { x: COL4_X, y: 0, width: COL4_W, height: H },
+      action: { type: 'postback', label: 'ブックで登録', data: 'book_register_start' },
     },
   ],
 })
@@ -171,6 +192,7 @@ await lineApi('POST', `/user/all/richmenu/${menu.richMenuId}`)
 console.log('✓ デフォルトリッチメニューに設定完了')
 console.log('')
 console.log('🎉 リッチメニューのセットアップが完了しました！')
-console.log(`   カレンダー → ${APP_URL}`)
-console.log(`   チャット   → ${APP_URL}/chat`)
-console.log('   予定登録   → postback (bulk_register_start)')
+console.log(`   カレンダー   → ${APP_URL}`)
+console.log(`   チャット     → ${APP_URL}/chat`)
+console.log('   予定登録     → postback (bulk_register_start)')
+console.log('   ブックで登録 → postback (book_register_start)')

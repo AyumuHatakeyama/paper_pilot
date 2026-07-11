@@ -8,6 +8,15 @@ export interface Print {
   content: string | null
   raw_text: string | null
   archived_at: string | null
+  book_id: string | null   // 所属するブックのID（NULL = 単発プリント）
+  print_books?: { id: string; title: string } | null
+  created_at: string
+}
+
+export interface PrintBook {
+  id: string
+  title: string
+  archived_at: string | null
   created_at: string
 }
 
@@ -33,6 +42,8 @@ export interface PrintEvent extends PrintEventRow {
     category: '予定' | '持ち物' | '提出物' | 'その他' | null
     content: string | null
     archived_at: string | null
+    book_id: string | null
+    print_books: { id: string; title: string } | null
   } | null
 }
 

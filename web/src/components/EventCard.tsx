@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import type { PrintEvent } from '@/types/print'
 import { CATEGORY_COLOR } from '@/types/print'
 
@@ -15,12 +16,14 @@ function daysUntil(date: string): number {
   return Math.ceil((new Date(date).getTime() - today.getTime()) / 86400000)
 }
 
-const cardClass = 'block bg-white rounded-xl p-4 shadow-sm border border-slate-100 hover:border-blue-200 transition-colors'
+const cardClass = 'block bg-white rounded-xl p-4 shadow-sm border border-slate-100 hover:border-blue-200 transition-colors cursor-pointer'
 
 export function EventCard({ event, showDate = true }: EventCardProps) {
+  const router = useRouter()
   const days = daysUntil(event.event_date)
   const urgent = event.is_deadline && days <= 3 && days >= 0
   const isManual = !event.print_id
+  const book = event.prints?.print_books
 
   const inner = (
     <div className="flex items-start justify-between gap-2">
@@ -48,6 +51,15 @@ export function EventCard({ event, showDate = true }: EventCardProps) {
           {isManual && event.target_person && (
             <span className="text-xs text-slate-500">{event.target_person}</span>
           )}
+          {book && (
+            <Link
+              href={`/books/${book.id}`}
+              onClick={(e) => e.stopPropagation()}
+              className="text-xs font-medium px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 hover:bg-purple-200 transition-colors"
+            >
+              📚 {book.title}
+            </Link>
+          )}
         </div>
         <p className="text-sm font-medium text-slate-800">
           {event.event_time && (
@@ -70,18 +82,11 @@ export function EventCard({ event, showDate = true }: EventCardProps) {
     </div>
   )
 
-  // 手動登録イベント → 編集ページへ
-  if (isManual) {
-    return (
-      <Link href={`/events/${event.id}/edit`} className={cardClass}>
-        {inner}
-      </Link>
-    )
-  }
-  // プリント由来イベント → プリント詳細ページへ
+  const href = isManual ? `/events/${event.id}/edit` : `/prints/${event.print_id}`
+
   return (
-    <Link href={`/prints/${event.print_id}`} className={cardClass}>
+    <div onClick={() => router.push(href)} className={cardClass}>
       {inner}
-    </Link>
+    </div>
   )
 }

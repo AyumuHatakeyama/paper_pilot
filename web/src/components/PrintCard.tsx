@@ -1,4 +1,7 @@
+'use client'
+
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import type { Print } from '@/types/print'
 import { CATEGORY_COLOR } from '@/types/print'
 
@@ -15,13 +18,14 @@ function daysUntil(deadline: string): number {
 }
 
 export function PrintCard({ print, showDeadline = true }: PrintCardProps) {
+  const router = useRouter()
   const days = print.deadline ? daysUntil(print.deadline) : null
   const urgent = days !== null && days <= 3
 
   return (
-    <Link
-      href={`/prints/${print.id}`}
-      className="block bg-white rounded-xl p-4 shadow-sm border border-slate-100 hover:border-blue-200 transition-colors"
+    <div
+      onClick={() => router.push(`/prints/${print.id}`)}
+      className="block bg-white rounded-xl p-4 shadow-sm border border-slate-100 hover:border-blue-200 transition-colors cursor-pointer"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
@@ -31,6 +35,15 @@ export function PrintCard({ print, showDeadline = true }: PrintCardProps) {
             </span>
             {print.target_person && (
               <span className="text-xs text-slate-500">{print.target_person}</span>
+            )}
+            {print.book_id && print.print_books && (
+              <Link
+                href={`/books/${print.book_id}`}
+                onClick={(e) => e.stopPropagation()}
+                className="text-xs font-medium px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 hover:bg-purple-200 transition-colors"
+              >
+                📚 {print.print_books.title}
+              </Link>
             )}
           </div>
           <p className="text-sm text-slate-700 line-clamp-2 whitespace-pre-line">
@@ -47,6 +60,6 @@ export function PrintCard({ print, showDeadline = true }: PrintCardProps) {
           </div>
         )}
       </div>
-    </Link>
+    </div>
   )
 }
