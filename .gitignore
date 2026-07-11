@@ -1,0 +1,22 @@
+# Environment variables — NEVER commit these
+.env
+.env.local
+.env.*.local
+
+# Supabase local dev
+supabase/.temp/
+
+# Next.js (Phase 2)
+.next/
+out/
+node_modules/
+
+# Vercel
+.vercel/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings (per-developer, not shared)
+.claude/settings.local.json
