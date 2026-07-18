@@ -25,6 +25,12 @@ export default function ArchivePage() {
   return (
     <div className="p-4 space-y-4">
       <h1 className="text-lg font-bold text-slate-800 pt-2">📦 アーカイブ</h1>
+      {/*
+        自動アーカイブの実処理はこのリポジトリのコードには無く、Supabase側のpg_cronジョブ
+        "auto-archive-prints"（DB内にSQLで直接登録、マイグレーションでは管理されていない）が
+        毎日UPDATE prints SET archived_at = now() WHERE deadline < now() - 30日 を実行している。
+        ジョブ定義を変更する場合はSQL Editor側（cron.job）を直接触る必要がある点に注意。
+      */}
       <p className="text-xs text-slate-400">締切から30日後に自動アーカイブされます</p>
 
       {loading ? (

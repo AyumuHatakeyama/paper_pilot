@@ -14,6 +14,11 @@ const SUGGESTIONS = [
   '明日必要なものは？',
 ]
 
+/**
+ * プリントについて自由に質問できるチャット画面。
+ * 送信先は`/api/chat`（このNext.jsアプリ内のAPI Route）で、Supabaseの`chat` Edge Functionは
+ * 使っていない（同等ロジックの別実装が2箇所に存在している状態。詳細はapi/chat/route.tsのコメント参照）。
+ */
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', text: 'プリントについて何でも聞いてください 📋\n「今週の締切は？」「水泳の持ち物は？」など' },

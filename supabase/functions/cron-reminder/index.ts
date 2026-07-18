@@ -4,6 +4,12 @@
  * Triggered by Supabase pg_cron or a scheduled invocation.
  * Checks for prints with deadlines: tomorrow / 3 days away / 7 days away.
  *
+ * 注意: このFunctionは`prints.deadline`を直接見る初期実装で、現状pg_cronにも
+ * スケジュール登録されていない（未使用の可能性が高い）。ToDoベースの締切リマインドは
+ * cron-notify（notification_settings連動、カテゴリ別の通知日数ルール付き）で
+ * 別途実装済みのため、実質的にこちらはcron-notifyに置き換えられている。
+ * 削除するか、あえて残すか（例えばprint_events由来ではない古いデータ向け）は要判断。
+ *
  * Setup (run in Supabase SQL editor after deploying this function):
  *   SELECT cron.schedule(
  *     'reminder-push',
@@ -16,24 +22,8 @@
  *     $$
  *   );
  */
-import { createClient } from "npm:@supabase/supabase-js@2"
-
-const supabase = createClient(
-  Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-)
-
-const LINE_BOT_API = "https://api.line.me/v2/bot/message"
-
-async function pushLine(userId: string, text: string): Promise<void> {
-  const token = Deno.env.get("LINE_CHANNEL_ACCESS_TOKEN")!
-  const res   = await fetch(`${LINE_BOT_API}/push`, {
-    method:  "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body:    JSON.stringify({ to: userId, messages: [{ type: "text", text }] }),
-  })
-  if (!res.ok) console.error("[pushLine]", await res.text())
-}
+import { supabase } from "../_shared/supabase-client.ts"
+import { pushLine } from "../_shared/line-client.ts"
 
 function buildReminderText(
   print: { target_person: string | null; category: string | null; content: string | null; deadline: string | null },

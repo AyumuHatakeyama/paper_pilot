@@ -4,17 +4,11 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type { Print } from '@/types/print'
 import { CATEGORY_COLOR } from '@/types/print'
+import { daysUntil } from '@/lib/date-utils'
 
 interface PrintCardProps {
   print: Print
   showDeadline?: boolean
-}
-
-function daysUntil(deadline: string): number {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const d = new Date(deadline)
-  return Math.ceil((d.getTime() - today.getTime()) / 86400000)
 }
 
 export function PrintCard({ print, showDeadline = true }: PrintCardProps) {

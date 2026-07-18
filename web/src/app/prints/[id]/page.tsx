@@ -20,10 +20,14 @@ export default function PrintDetailPage() {
   useEffect(() => {
     if (typeof params.id !== 'string') return
     const printId = params.id
+    // todosはprint_idではなくprint_event_id単位で紐づくため、先にevents取得を待ってから
+    // そのidsでtodosを引く必要がある（getPrintByIdは依存が無いので並行して取得する）。
+    // todosの取得は本題のプリント表示に対して副次的な情報なので、ここが失敗しても
+    // プリント本体の表示に影響しないよう個別にcatchして空配列にフォールバックする。
     getPrintEvents(printId).then(async (evs) => {
       const [p, todoList] = await Promise.all([
         getPrintById(printId),
-        getTodosByEventIds(evs.map(e => e.id)),
+        getTodosByEventIds(evs.map(e => e.id)).catch(() => []),
       ])
       setPrint(p)
       setEvents(evs)

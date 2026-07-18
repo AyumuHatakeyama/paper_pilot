@@ -7,7 +7,9 @@ import { EventCard } from '@/components/EventCard'
 import { TodoItem } from '@/components/TodoItem'
 import { getActiveEvents, getActiveTodos, updateTodoStatus } from '@/lib/supabase'
 import type { PrintEvent, Todo } from '@/types/print'
+import { daysUntil } from '@/lib/date-utils'
 
+/** トップ画面（カレンダー）。月表示 + 選択日/直近の予定・締切・ToDo一覧を1画面にまとめている。 */
 export default function CalendarPage() {
   const [events, setEvents] = useState<PrintEvent[]>([])
   const [todos, setTodos] = useState<Todo[]>([])
@@ -15,12 +17,16 @@ export default function CalendarPage() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
 
   useEffect(() => {
-    Promise.all([getActiveEvents(), getActiveTodos()])
+    // ToDoの取得はカレンダー本体（予定・締切）に対して副次的な情報なので、
+    // 個別にcatchして空配列にフォールバックし、失敗してもカレンダー表示自体は生かす
+    Promise.all([
+      getActiveEvents().catch(() => { console.error("[CalendarPage] getActiveEvents failed"); return [] }),
+      getActiveTodos().catch(() => { console.error("[CalendarPage] getActiveTodos failed"); return [] }),
+    ])
       .then(([evs, tds]) => {
         setEvents(evs)
         setTodos(tds)
       })
-      .catch(console.error)
       .finally(() => setLoading(false))
   }, [])
 
@@ -37,25 +43,23 @@ export default function CalendarPage() {
     ? todos.filter(t => t.due_date === selectedDate)
     : []
 
+  // 予定・締切は「今日〜14日以内」のみ（過去の予定を一覧に残す意味が無いため）
   const upcoming = events
     .filter(e => {
-      const days = Math.ceil((new Date(e.event_date).getTime() - Date.now()) / 86400000)
+      const days = daysUntil(e.event_date)
       return days >= 0 && days <= 14
     })
     .slice(0, 10)
 
+  // ToDoは下限を設けず「14日以内」のみ（期限超過であっても未完了なら気づけるよう出し続ける）
   const upcomingTodos = todos
-    .filter(t => {
-      if (!t.due_date) return false
-      const days = Math.ceil((new Date(t.due_date).getTime() - new Date().getTime()) / 86400000)
-      return days <= 14
-    })
+    .filter(t => t.due_date && daysUntil(t.due_date) <= 14)
     .slice(0, 10)
 
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between pt-2">
-        <h1 className="text-lg font-bold text-slate-800">📅 AIプリント秘書</h1>
+        <h1 className="text-lg font-bold text-slate-800">📅 OTAYORI NAVI</h1>
         <Link
           href="/events/new"
           className="w-9 h-9 flex items-center justify-center bg-blue-600 text-white rounded-full text-xl font-light shadow-sm hover:bg-blue-700 transition-colors"

@@ -17,10 +17,21 @@ const DEFAULT_SETTINGS: Omit<NotificationSettings, 'id' | 'line_user_id' | 'upda
 
 const labelClass = 'text-sm font-medium text-slate-600 block mb-1'
 
+/**
+ * 通知（週次ダイジェスト・締切リマインド）の頻度・時刻・ON/OFFを設定する画面。
+ * cron-notify（Edge Function）はこの設定を毎時読みに行くだけなので、保存以外に
+ * 何も「反映」の手続きは要らない（次にcronが走ったタイミングから新しい設定が使われる）。
+ *
+ * send_when_emptyはあえてUIを出していない（テスト期間はtrue固定の想定で、本番運用移行時の
+ * 切り替えフラグとして予約している）。読み込んだ既存値をそのまま保存時に持ち回すだけ。
+ */
 export default function SettingsPage() {
   const { userId, isReady } = useLiff()
 
   const [loading, setLoading] = useState(true)
+  // 読み込み失敗時はフォームを表示しない（表示するとデフォルト値のまま保存され、
+  // 既存の設定を意図せず上書きしてしまうため）
+  const [loadError, setLoadError] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [sendWhenEmpty, setSendWhenEmpty] = useState(true)
@@ -31,20 +42,38 @@ export default function SettingsPage() {
   const [digestEnabled, setDigestEnabled] = useState(DEFAULT_SETTINGS.digest_enabled)
   const [reminderEnabled, setReminderEnabled] = useState(DEFAULT_SETTINGS.reminder_enabled)
 
-  useEffect(() => {
-    if (!isReady || !userId) return
-    getNotificationSettings(userId).then(s => {
-      const base = s ?? { ...DEFAULT_SETTINGS, line_user_id: userId, id: '', updated_at: '' }
+  // 実際のフェッチ本体。setLoading(true)/setLoadError(false)はここでは呼ばない
+  // （呼び出し側がeffect内なら初期stateのままでよく、再読み込みボタンなら
+  // クリックハンドラ側でユーザー操作契機として呼ぶ。effect内で直接setStateすると
+  // react-hooks/set-state-in-effectに引っかかるため）
+  function fetchSettings(uid: string): Promise<void> {
+    return getNotificationSettings(uid).then(s => {
+      const base = s ?? { ...DEFAULT_SETTINGS, line_user_id: uid, id: '', updated_at: '' }
       setFrequency(base.frequency)
       setWeeklyDay(base.weekly_day ?? 0)
       setSendTime(base.send_time.slice(0, 5))
       setDigestEnabled(base.digest_enabled)
       setReminderEnabled(base.reminder_enabled)
       setSendWhenEmpty(base.send_when_empty)
+      setLoadError(false)
+    }).catch(() => {
+      setLoadError(true)
     }).finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    if (!isReady || !userId) return
+    fetchSettings(userId)
   }, [isReady, userId])
 
-  async function handleSubmit(e: React.FormEvent) {
+  function handleRetry() {
+    if (!userId) return
+    setLoading(true)
+    setLoadError(false)
+    fetchSettings(userId)
+  }
+
+  async function handleSubmit(e: React.SubmitEvent<HTMLFormElement>) {
     e.preventDefault()
     if (!userId) return
     setSaving(true)
@@ -70,6 +99,15 @@ export default function SettingsPage() {
     return (
       <div className="flex justify-center items-center h-64">
         <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <div className="p-4 text-center space-y-3">
+        <p className="text-sm text-slate-500">設定の読み込みに失敗しました。</p>
+        <button onClick={handleRetry} className="text-sm text-blue-600 font-medium">再読み込み</button>
       </div>
     )
   }

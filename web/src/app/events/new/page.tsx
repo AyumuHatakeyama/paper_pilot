@@ -1,17 +1,33 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { createManualEvent } from '@/lib/supabase'
 
 const inputClass = 'w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500'
 const labelClass = 'text-sm font-medium text-slate-600 block mb-1'
 
+// useSearchParams()はNext.jsの静的プリレンダリング時にSuspense境界が必須なため、
+// ページ本体をSuspenseで包んで公開する。
 export default function NewEventPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex justify-center items-center h-64">
+        <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+      </div>
+    }>
+      <NewEventForm />
+    </Suspense>
+  )
+}
+
+function NewEventForm() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const today = new Date().toISOString().slice(0, 10)
 
-  const [eventDate, setEventDate] = useState(today)
+  // URLパラメータ ?date=YYYY-MM-DD があれば日付の初期値として使う（無ければ今日の日付）
+  const [eventDate, setEventDate] = useState(() => searchParams.get('date') ?? today)
   const [eventTime, setEventTime] = useState('')
   const [title, setTitle] = useState('')
   const [isDeadline, setIsDeadline] = useState(false)
@@ -19,14 +35,7 @@ export default function NewEventPage() {
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // URLパラメータ ?date=YYYY-MM-DD があれば日付を初期値に設定
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const date = params.get('date')
-    if (date) setEventDate(date)
-  }, [])
-
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.SubmitEvent<HTMLFormElement>) {
     e.preventDefault()
     if (!title.trim()) return
     setSaving(true)

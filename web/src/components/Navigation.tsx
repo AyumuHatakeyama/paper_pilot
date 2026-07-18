@@ -17,6 +17,7 @@ export function Navigation() {
     <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-50">
       <div className="max-w-lg mx-auto flex">
         {NAV_ITEMS.map(({ href, icon, label }) => {
+          // '/'だけはstartsWith判定にすると全パスが前方一致してしまうため、完全一致にする
           const active = href === '/' ? pathname === '/' : pathname.startsWith(href)
           return (
             <Link

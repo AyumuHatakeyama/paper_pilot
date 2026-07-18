@@ -7,6 +7,11 @@ import { getEventById, updateManualEvent, deleteManualEvent } from '@/lib/supaba
 const inputClass = 'w-full border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-700 placeholder:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500'
 const labelClass = 'text-sm font-medium text-slate-600 block mb-1'
 
+/**
+ * Web手動登録イベント（print_id=NULL）専用の編集画面。
+ * LINE・プリント由来のイベント（print_idあり）はgetEventByIdが対象外として扱うため、
+ * ここに来た時点でそちらのidだった場合は「見つからない」扱いでトップへリダイレクトする。
+ */
 export default function EditEventPage() {
   const params = useParams()
   const router = useRouter()
@@ -37,7 +42,7 @@ export default function EditEventPage() {
     }).finally(() => setLoading(false))
   }, [params.id, router])
 
-  async function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.SubmitEvent<HTMLFormElement>) {
     e.preventDefault()
     if (!title.trim()) return
     setSaving(true)

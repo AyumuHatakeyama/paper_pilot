@@ -3,28 +3,30 @@
 import { useState } from 'react'
 import type { Todo } from '@/types/print'
 import { TODO_CATEGORY_COLOR } from '@/types/print'
+import { daysUntil } from '@/lib/date-utils'
 
 interface TodoItemProps {
   todo: Todo
+  /** チェック操作直後に呼ばれる。呼び出し側でDB更新とローカルstateの更新を行う想定（本コンポーネントはDBを直接触らない） */
   onToggle: (id: string, completed: boolean) => void | Promise<void>
-}
-
-function daysUntil(date: string): number {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  return Math.ceil((new Date(date).getTime() - today.getTime()) / 86400000)
 }
 
 export function TodoItem({ todo, onToggle }: TodoItemProps) {
   const [updating, setUpdating] = useState(false)
   const completed = todo.status === '完了'
   const days = todo.due_date ? daysUntil(todo.due_date) : null
+  // 完了済みのToDoは期限が近くても強調しない（対応が終わっているため）
   const urgent = !completed && days !== null && days <= 3
 
+  // 更新中はチェックボックスを二重操作できないようにdisabledにし、失敗時も確実に解除する。
+  // onToggle（DB更新）が失敗した場合、チェックボックスは見た目上元の状態に戻るだけで
+  // ユーザーには何も伝わらないため、明示的にエラーを知らせる。
   async function handleChange() {
     setUpdating(true)
     try {
       await onToggle(todo.id, !completed)
+    } catch {
+      alert('更新に失敗しました。もう一度お試しください。')
     } finally {
       setUpdating(false)
     }

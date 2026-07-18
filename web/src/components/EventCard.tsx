@@ -4,16 +4,11 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type { PrintEvent } from '@/types/print'
 import { CATEGORY_COLOR } from '@/types/print'
+import { daysUntil } from '@/lib/date-utils'
 
 interface EventCardProps {
   event: PrintEvent
   showDate?: boolean
-}
-
-function daysUntil(date: string): number {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  return Math.ceil((new Date(date).getTime() - today.getTime()) / 86400000)
 }
 
 const cardClass = 'block bg-white rounded-xl p-4 shadow-sm border border-slate-100 hover:border-blue-200 transition-colors cursor-pointer'
@@ -22,6 +17,7 @@ export function EventCard({ event, showDate = true }: EventCardProps) {
   const router = useRouter()
   const days = daysUntil(event.event_date)
   const urgent = event.is_deadline && days <= 3 && days >= 0
+  // print_id=NULL = プリントに紐づかないWeb手動登録イベント（詳細はlib/events.tsのファイル冒頭コメント参照）
   const isManual = !event.print_id
   const book = event.prints?.print_books
 

@@ -150,7 +150,7 @@ try {
 const menu = await lineApi('POST', '/richmenu', {
   size: { width: W, height: H },
   selected: true,
-  name: 'AIプリント秘書メニュー',
+  name: 'OTAYORI NAVIメニュー',
   chatBarText: 'メニュー',
   areas: [
     {

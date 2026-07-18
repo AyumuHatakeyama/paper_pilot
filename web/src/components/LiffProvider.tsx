@@ -2,6 +2,17 @@
 
 import { createContext, useContext, useEffect, useState } from 'react'
 
+/**
+ * LIFF（LINE Front-end Framework）でログインユーザーを識別し、許可リストに無ければ
+ * 画面をブロックするアプリ全体のゲート。
+ *
+ * ⚠️ セキュリティ上の注意: ここでの認可チェックはあくまで画面表示の制御であり、
+ * Supabaseへのデータアクセス自体を防いではいない。DB側のRLSはanonロールに
+ * ほぼ無条件で許可するPoC設定のままなので、anon keyを直接使われた場合はこのゲートを
+ * 迂回できてしまう。複数家族に開放する前に、RLSをline_user_id/family_id単位で
+ * 絞り込む対応と合わせて強化する必要がある。
+ */
+
 interface LiffContextType {
   userId: string | null
   isReady: boolean
@@ -19,23 +30,21 @@ export function useLiff() {
 }
 
 export function LiffProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<LiffContextType>({
-    userId: null,
-    isReady: false,
-    isAuthorized: false,
-  })
+  const liffId = process.env.NEXT_PUBLIC_LIFF_ID
+
+  // Dev mode（LIFF_ID未設定）は最初から結果が決まっているため、effectを待たずlazy initializerで即確定する
+  const [state, setState] = useState<LiffContextType>(() =>
+    liffId
+      ? { userId: null, isReady: false, isAuthorized: false }
+      : { userId: 'dev-user', isReady: true, isAuthorized: true }
+  )
 
   useEffect(() => {
-    const liffId = process.env.NEXT_PUBLIC_LIFF_ID
-
-    // Dev mode: skip LIFF auth if LIFF_ID is not configured
-    if (!liffId) {
-      setState({ userId: 'dev-user', isReady: true, isAuthorized: true })
-      return
-    }
+    if (!liffId) return // dev modeは上のlazy initializerで解決済み
 
     const allowed = (process.env.NEXT_PUBLIC_ALLOWED_LINE_USER_IDS ?? '').split(',').filter(Boolean)
 
+    // @line/liffはwindow等ブラウザAPIに依存するため、SSR/ビルド時に評価されないよう動的importにしている
     import('@line/liff').then(({ default: liff }) => {
       liff.init({ liffId }).then(() => {
         if (!liff.isLoggedIn()) {
@@ -47,7 +56,7 @@ export function LiffProvider({ children }: { children: React.ReactNode }) {
         setState({ userId, isReady: true, isAuthorized })
       }).catch(console.error)
     })
-  }, [])
+  }, [liffId])
 
   if (!state.isReady) {
     return (

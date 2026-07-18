@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import Anthropic from '@anthropic-ai/sdk'
 
+/**
+ * Web版チャット（/chat画面）が叩くAPI Route。ほぼ同じロジックが
+ * `supabase/functions/chat/index.ts`にも存在するが、そちらは現状どこからも
+ * 呼ばれていない（未使用の可能性が高い）。重複を解消するなら、どちらかに一本化すること。
+ */
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,

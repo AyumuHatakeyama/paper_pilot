@@ -2,9 +2,11 @@
 
 import { useState } from 'react'
 import type { PrintEvent, Todo } from '@/types/print'
+import { daysUntil } from '@/lib/date-utils'
 
 interface CalendarViewProps {
   events: PrintEvent[]
+  /** 省略可。渡すと、未完了ToDoの期限が近い日を⚠アイコン＋赤字＋橙ドットで強調表示する */
   todos?: Todo[]
   onDayClick: (date: string) => void
   selectedDate: string | null
@@ -12,17 +14,14 @@ interface CalendarViewProps {
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 
-function daysUntil(date: string): number {
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  return Math.ceil((new Date(date).getTime() - today.getTime()) / 86400000)
-}
-
 export function CalendarView({ events, todos = [], onDayClick, selectedDate }: CalendarViewProps) {
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth())
 
+  // 月グリッド生成: 1日の曜日（0=日）だけ空セルを先頭に埋め、そのあとdaysInMonth日分を並べる
+  // （getDay()はDate生成時の月をまたぐ自動繰り上げ処理を利用しており、
+  //  new Date(year, month+1, 0)は「翌月0日目」＝「当月の最終日」を指す）
   const firstDay = new Date(year, month, 1).getDay()
   const daysInMonth = new Date(year, month + 1, 0).getDate()
 

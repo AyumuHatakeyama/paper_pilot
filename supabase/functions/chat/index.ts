@@ -6,6 +6,10 @@
  * Auth: Authorization: Bearer <SUPABASE_ANON_KEY>  (validated by LIFF token in Phase 2)
  *
  * Returns: { answer: string }
+ *
+ * 注意: 現在のWeb版チャット画面（web/src/app/chat/page.tsx）は、このEdge Functionではなく
+ * web/src/app/api/chat/route.ts（Next.js側の同等実装）を呼んでいる。このFunctionは
+ * どこからも呼ばれていない可能性が高い（未使用コードの候補）。
  */
 import { createClient } from "npm:@supabase/supabase-js@2"
 import Anthropic from "npm:@anthropic-ai/sdk"
