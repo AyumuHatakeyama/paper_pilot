@@ -2,29 +2,43 @@
 
 import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { getPrintById, archivePrint, getPrintEvents } from '@/lib/supabase'
+import { getPrintById, archivePrint, getPrintEvents, getTodosByEventIds, updateTodoStatus } from '@/lib/supabase'
 import { CATEGORY_COLOR } from '@/types/print'
-import type { Print, PrintEventRow } from '@/types/print'
+import type { Print, PrintEventRow, Todo } from '@/types/print'
+import { TodoItem } from '@/components/TodoItem'
 
 export default function PrintDetailPage() {
   const params = useParams()
   const router = useRouter()
   const [print, setPrint] = useState<Print | null>(null)
   const [events, setEvents] = useState<PrintEventRow[]>([])
+  const [todos, setTodos] = useState<Todo[]>([])
   const [loading, setLoading] = useState(true)
   const [archiving, setArchiving] = useState(false)
   const [imgError, setImgError] = useState(false)
 
   useEffect(() => {
     if (typeof params.id !== 'string') return
-    Promise.all([
-      getPrintById(params.id),
-      getPrintEvents(params.id),
-    ]).then(([p, evs]) => {
+    const printId = params.id
+    getPrintEvents(printId).then(async (evs) => {
+      const [p, todoList] = await Promise.all([
+        getPrintById(printId),
+        getTodosByEventIds(evs.map(e => e.id)),
+      ])
       setPrint(p)
       setEvents(evs)
+      setTodos(todoList)
     }).finally(() => setLoading(false))
   }, [params.id])
+
+  async function handleToggleTodo(id: string, completed: boolean) {
+    await updateTodoStatus(id, completed)
+    setTodos(prev => prev.map(t =>
+      t.id === id
+        ? { ...t, status: completed ? '完了' : '未完了', completed_at: completed ? new Date().toISOString() : null }
+        : t
+    ))
+  }
 
   async function handleArchive() {
     if (!print) return
@@ -119,6 +133,18 @@ export default function PrintDetailPage() {
           </div>
         )}
       </div>
+
+      {/* ToDo */}
+      {todos.length > 0 && (
+        <div className="bg-white rounded-xl p-4 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-600 mb-1">✅ ToDo</h2>
+          <div className="divide-y divide-slate-50">
+            {todos.map(todo => (
+              <TodoItem key={todo.id} todo={todo} onToggle={handleToggleTodo} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Content */}
       <div className="bg-white rounded-xl p-4 shadow-sm">

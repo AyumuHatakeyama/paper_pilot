@@ -47,6 +47,26 @@ export interface PrintEvent extends PrintEventRow {
   } | null
 }
 
+/** プリントから抽出した予定・締切のToDo（print_events 1件につき最大1件） */
+export interface Todo {
+  id: string
+  print_event_id: string | null
+  title: string
+  due_date: string | null // YYYY-MM-DD
+  category: '要準備' | '提出のみ' | 'イベント参加' | null
+  status: '未完了' | '完了'
+  reminder_enabled: boolean
+  todo_enabled: boolean
+  completed_at: string | null
+  created_at: string
+}
+
+export const TODO_CATEGORY_COLOR: Record<string, string> = {
+  '要準備':       'bg-orange-100 text-orange-700',
+  '提出のみ':     'bg-sky-100 text-sky-700',
+  'イベント参加': 'bg-emerald-100 text-emerald-700',
+}
+
 export const CATEGORY_COLOR: Record<string, string> = {
   '予定':   'bg-blue-100 text-blue-700',
   '提出物': 'bg-red-100 text-red-700',

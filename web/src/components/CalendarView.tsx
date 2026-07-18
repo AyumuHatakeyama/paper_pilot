@@ -1,17 +1,24 @@
 'use client'
 
 import { useState } from 'react'
-import type { PrintEvent } from '@/types/print'
+import type { PrintEvent, Todo } from '@/types/print'
 
 interface CalendarViewProps {
   events: PrintEvent[]
+  todos?: Todo[]
   onDayClick: (date: string) => void
   selectedDate: string | null
 }
 
 const WEEKDAYS = ['日', '月', '火', '水', '木', '金', '土']
 
-export function CalendarView({ events, onDayClick, selectedDate }: CalendarViewProps) {
+function daysUntil(date: string): number {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return Math.ceil((new Date(date).getTime() - today.getTime()) / 86400000)
+}
+
+export function CalendarView({ events, todos = [], onDayClick, selectedDate }: CalendarViewProps) {
   const today = new Date()
   const [year, setYear] = useState(today.getFullYear())
   const [month, setMonth] = useState(today.getMonth())
@@ -28,6 +35,16 @@ export function CalendarView({ events, onDayClick, selectedDate }: CalendarViewP
     const entry = eventMap.get(key)!
     if (event.is_deadline) entry.deadline = true
     else entry.nonDeadline = true
+  }
+
+  // Map due_date → 未完了ToDoが近い（3日以内・期限超過含む）かどうか
+  const todoMap = new Map<string, { urgent: boolean }>()
+  for (const todo of todos) {
+    if (!todo.due_date) continue
+    const key = todo.due_date
+    const urgent = daysUntil(todo.due_date) <= 3
+    const existing = todoMap.get(key)
+    todoMap.set(key, { urgent: existing?.urgent || urgent })
   }
 
   const prevMonth = () => {
@@ -73,6 +90,7 @@ export function CalendarView({ events, onDayClick, selectedDate }: CalendarViewP
           if (!day) return <div key={`empty-${i}`} />
           const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
           const eventInfo = eventMap.get(dateStr)
+          const todoInfo = todoMap.get(dateStr)
           const isToday = dateStr === todayStr
           const isSelected = dateStr === selectedDate
           const col = i % 7
@@ -85,10 +103,16 @@ export function CalendarView({ events, onDayClick, selectedDate }: CalendarViewP
                 isSelected ? 'bg-blue-50' : 'hover:bg-slate-50'
               }`}
             >
+              {/* 未完了ToDoの期限が近い日は右上に⚠を表示して視覚的に強調 */}
+              {todoInfo?.urgent && (
+                <span className="absolute top-0 right-1 text-[10px] leading-none">⚠️</span>
+              )}
               <span
                 className={`w-7 h-7 flex items-center justify-center rounded-full text-sm ${
                   isToday
                     ? 'bg-blue-600 text-white font-bold'
+                    : todoInfo?.urgent
+                    ? 'text-red-600 font-semibold'
                     : col === 0
                     ? 'text-red-500'
                     : col === 6
@@ -98,14 +122,17 @@ export function CalendarView({ events, onDayClick, selectedDate }: CalendarViewP
               >
                 {day}
               </span>
-              {/* Event dots: 青=予定, 赤=締切 */}
-              {eventInfo && (eventInfo.nonDeadline || eventInfo.deadline) && (
+              {/* Event dots: 青=予定, 赤=締切, 橙=未完了ToDo */}
+              {(eventInfo?.nonDeadline || eventInfo?.deadline || todoInfo) && (
                 <div className="flex gap-0.5 mt-0.5">
-                  {eventInfo.nonDeadline && (
+                  {eventInfo?.nonDeadline && (
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
                   )}
-                  {eventInfo.deadline && (
+                  {eventInfo?.deadline && (
                     <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                  )}
+                  {todoInfo && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                   )}
                 </div>
               )}
@@ -121,6 +148,9 @@ export function CalendarView({ events, onDayClick, selectedDate }: CalendarViewP
         </span>
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />締切
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />ToDo
         </span>
       </div>
     </div>

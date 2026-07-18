@@ -47,6 +47,10 @@ const BOOK_REGISTER_START = "book_register_start"
 const BOOK_MAX_PAGES     = 10
 const BOOK_SESSION_TTL_MS = 10 * 60 * 1000 // ブックは複数枚撮影しながら送るため他フローより長めの10分
 
+// ToDo確認フロー（通常の1:1写真登録のみ）。postback dataは他フローと違い
+// `action=todo_add&print_id=...&reminder=...` のクエリ文字列形式で持つ。
+const TODO_CATEGORIES = ["要準備", "提出のみ", "イベント参加"] as const
+
 // ---------------------------------------------------------------------------
 // LINE utilities
 // ---------------------------------------------------------------------------
@@ -175,8 +179,8 @@ async function analyzePrint(
   "content": "内容の要約（Markdown形式で箇条書き）",
   "items": ["持ち物リスト（持ち物の場合のみ、空の場合は空配列）"],
   "events": [
-    { "date": "YYYY-MM-DD", "time": "HH:MM or null", "title": "イベント名", "is_deadline": false },
-    { "date": "YYYY-MM-DD", "time": null, "title": "締切名", "is_deadline": true }
+    { "date": "YYYY-MM-DD", "time": "HH:MM or null", "title": "イベント名", "is_deadline": false, "category": "イベント参加" },
+    { "date": "YYYY-MM-DD", "time": null, "title": "締切名", "is_deadline": true, "category": "要準備" }
   ]
 }
 
@@ -184,6 +188,10 @@ async function analyzePrint(
 ・単一予定のプリントでも events は必ず配列（要素1件）で返してください。
 ・is_deadlineは提出締切・申込締切などの場合はtrue、行事・実施日などはfalseにしてください。
 ・timeはプリントに時刻の記載がある場合のみ "HH:MM" 形式で設定し、記載がない場合は null にしてください。
+・categoryは各イベントについて、保護者側の対応の性質を次の基準で判定してください（該当がなければnull）。
+  ・材料購入・工作道具の準備・服装指定など、事前の準備が必要なものは「要準備」
+  ・署名・捺印・提出のみで完結するもの（同意書提出、アンケート提出など）は「提出のみ」
+  ・日程の把握のみで、保護者側に特段の対応が不要なもの（行事の実施日・参観日など）は「イベント参加」
 ・表形式の場合、一番左の列は日付である可能性が高い。左端の列を起点に各行の情報を対応づけて読み取ること。
 ・追加指示がある場合はそれを優先して解釈してください。
 ・JSON以外は出力しないでください。`,
@@ -231,6 +239,33 @@ function buildReplyText(parsed: Record<string, unknown>): string {
   ].join("\n")
 }
 
+// print_eventsに紐づくtodosを一括作成する。ブック登録・予定一括登録（LINEチャット一括登録）は
+// 件数が多く個別確認に向かないため、todo_enabled=falseで記録のみ行いプロンプトは出さない。
+async function insertTodosForEvents(
+  events: { id: string; event_date: string; title: string; category?: string | null }[],
+  opts: { reminderEnabled: boolean; todoEnabled: boolean },
+): Promise<void> {
+  if (events.length === 0) return
+  const rows = events.map((e) => ({
+    print_event_id:   e.id,
+    title:            e.title,
+    due_date:         e.event_date,
+    category:         e.category ?? null,
+    reminder_enabled: opts.reminderEnabled,
+    todo_enabled:     opts.todoEnabled,
+  }))
+  const { error } = await supabase.from("todos").insert(rows)
+  if (error) console.error("[insertTodosForEvents] insert error", error)
+}
+
+type SavedPrintEvent = {
+  id:          string
+  event_date:  string
+  title:       string
+  is_deadline: boolean
+  category:    string | null
+}
+
 // ---------------------------------------------------------------------------
 // Shared: analyze an already-uploaded image and persist prints/print_events
 //
@@ -242,12 +277,18 @@ async function analyzeAndSavePrint(
   imageUrl: string,
   instruction?: string,
   bookId?: string,
-): Promise<Record<string, unknown>> {
+): Promise<{ parsed: Record<string, unknown>; printId: string; savedEvents: SavedPrintEvent[] }> {
   const { buffer, contentType } = await fetchImageFromUrl(imageUrl)
   const parsed = await analyzePrint(buffer, contentType, instruction)
 
   // Derive date/deadline from events array for backward compat
-  type ParsedEvent = { date: string; time?: string | null; title: string; is_deadline: boolean }
+  type ParsedEvent = {
+    date: string
+    time?: string | null
+    title: string
+    is_deadline: boolean
+    category?: string | null
+  }
   const events = (parsed.events as ParsedEvent[] | undefined) ?? []
   const firstDate     = events.find((e) => !e.is_deadline)?.date ?? null
   const firstDeadline = events.find((e) =>  e.is_deadline)?.date ?? null
@@ -267,24 +308,83 @@ async function analyzeAndSavePrint(
   }).select("id").single()
   if (dbError) throw dbError
 
+  const printId = printRow.id as string
+  let savedEvents: SavedPrintEvent[] = []
+
   // Insert each event into print_events
-  if (events.length > 0 && printRow?.id) {
+  if (events.length > 0) {
     const eventRows = events
       .filter((e) => e.date && e.title)
       .map((e) => ({
-        print_id:    printRow.id,
+        print_id:    printId,
         event_date:  e.date,
         event_time:  e.time ?? null,
         title:       e.title,
         is_deadline: e.is_deadline ?? false,
+        category:    TODO_CATEGORIES.includes(e.category as typeof TODO_CATEGORIES[number]) ? e.category : null,
       }))
     if (eventRows.length > 0) {
-      const { error: eventsError } = await supabase.from("print_events").insert(eventRows)
-      if (eventsError) console.error("[analyzeAndSavePrint] print_events insert error:", eventsError)
+      const { data: insertedEvents, error: eventsError } = await supabase
+        .from("print_events")
+        .insert(eventRows)
+        .select("id, event_date, title, is_deadline, category")
+      if (eventsError) {
+        console.error("[analyzeAndSavePrint] print_events insert error:", eventsError)
+      } else {
+        savedEvents = (insertedEvents ?? []) as SavedPrintEvent[]
+      }
     }
   }
 
-  return parsed
+  // ブック登録（年間行事予定一括取り込み相当）経由は個別確認に向かないため、
+  // todo_enabled=falseで記録だけ行い、ToDo確認プロンプトは出さない
+  if (bookId) {
+    await insertTodosForEvents(savedEvents, { reminderEnabled: false, todoEnabled: false })
+  }
+
+  return { parsed, printId, savedEvents }
+}
+
+// トリガー条件：is_deadline: true または event_date が今日以降のイベントが1件以上ある場合のみ
+// ToDo追加のQuick Reply確認を出す。0件ならnullを返しスキップ（従来通りの解析結果のみ返信）。
+function buildTodoPromptMessage(printId: string, events: SavedPrintEvent[]): LineMessage | null {
+  if (events.length === 0) return null
+
+  const today = new Date().toISOString().split("T")[0]
+  const qualifies = events.some((e) => e.is_deadline || e.event_date >= today)
+  if (!qualifies) return null
+
+  const [first, ...rest] = events
+  const label = rest.length > 0 ? `「${first.title}」ほか${rest.length}件` : `「${first.title}」`
+
+  return {
+    type: "text",
+    text: `📋 このプリントをToDoに追加しますか？\n\n（対象：${label}）`,
+    quickReply: {
+      items: [
+        {
+          type:   "action",
+          action: {
+            type:  "postback",
+            label: "ToDoに追加＋リマインドON",
+            data:  `action=todo_add&print_id=${printId}&reminder=true`,
+          },
+        },
+        {
+          type:   "action",
+          action: {
+            type:  "postback",
+            label: "ToDoに追加（リマインドなし）",
+            data:  `action=todo_add&print_id=${printId}&reminder=false`,
+          },
+        },
+        {
+          type:   "action",
+          action: { type: "postback", label: "ToDo不要（記録のみ）", data: `action=todo_skip&print_id=${printId}` },
+        },
+      ],
+    },
+  }
 }
 
 async function analyzeAndReply(
@@ -293,8 +393,13 @@ async function analyzeAndReply(
   instruction?: string,
 ): Promise<void> {
   try {
-    const parsed = await analyzeAndSavePrint(imageUrl, instruction)
-    await replyLine(replyToken, [textMessage(buildReplyText(parsed))])
+    const { parsed, printId, savedEvents } = await analyzeAndSavePrint(imageUrl, instruction)
+
+    const messages = [textMessage(buildReplyText(parsed))]
+    const todoPrompt = buildTodoPromptMessage(printId, savedEvents)
+    if (todoPrompt) messages.push(todoPrompt)
+
+    await replyLine(replyToken, messages)
   } catch (err) {
     console.error("[analyzeAndReply]", err)
     await replyLine(
@@ -549,12 +654,22 @@ async function handleBulkRegisterConfirm(
     return
   }
 
-  const { error: insertError } = await supabase.from("print_events").insert(eventRows)
+  const { data: insertedRows, error: insertError } = await supabase
+    .from("print_events")
+    .insert(eventRows)
+    .select("id, event_date, title")
   if (insertError) {
     console.error("[handleBulkRegisterConfirm] insert error", insertError)
     await replyLine(replyToken, [textMessage("登録中にエラーが発生しました。もう一度試してください。")])
     return
   }
+
+  // LINEチャット一括登録は件数が多く個別確認に向かないため、
+  // todo_enabled=falseで記録だけ行い、ToDo確認プロンプトは出さない
+  await insertTodosForEvents(
+    (insertedRows ?? []).map((r) => ({ id: r.id, event_date: r.event_date, title: r.title, category: null })),
+    { reminderEnabled: false, todoEnabled: false },
+  )
 
   await replyLine(
     replyToken,
@@ -789,12 +904,82 @@ async function handleImage(event: LineEvent): Promise<void> {
   }
 }
 
+// ToDo追加確認Quick Reply（buildTodoPromptMessage）のpostback受信時の処理。
+// dataは他フローの固定文字列と違い `action=todo_add&print_id=...&reminder=...` のクエリ文字列形式。
+async function handleTodoAction(replyToken: string, data: string): Promise<void> {
+  const params  = new URLSearchParams(data)
+  const action  = params.get("action")
+  const printId = params.get("print_id")
+
+  if (!printId) {
+    await replyLine(replyToken, [textMessage("エラーが発生しました。もう一度試してください。")])
+    return
+  }
+
+  if (action === "todo_add") {
+    const reminderEnabled = params.get("reminder") === "true"
+
+    // 対象printに紐づく、日付ありのprint_eventsを取得（1枚に複数日程あれば全件まとめてToDo化する）
+    const { data: targetEvents, error } = await supabase
+      .from("print_events")
+      .select("id, title, event_date, category")
+      .eq("print_id", printId)
+      .not("event_date", "is", null)
+
+    if (error) {
+      console.error("[handleTodoAction] print_events fetch error", error)
+      await replyLine(replyToken, [textMessage("エラーが発生しました。もう一度試してください。")])
+      return
+    }
+
+    const todosToInsert = (targetEvents ?? []).map((e) => ({
+      print_event_id:   e.id,
+      title:            e.title,
+      due_date:         e.event_date,
+      category:         e.category,
+      reminder_enabled: reminderEnabled,
+      todo_enabled:     true,
+    }))
+
+    if (todosToInsert.length === 0) {
+      await replyLine(replyToken, [textMessage("ToDo化できる日程が見つかりませんでした。")])
+      return
+    }
+
+    const { error: insertError } = await supabase.from("todos").insert(todosToInsert)
+    if (insertError) {
+      console.error("[handleTodoAction] todos insert error", insertError)
+      await replyLine(replyToken, [textMessage("ToDoの登録中にエラーが発生しました。もう一度試してください。")])
+      return
+    }
+
+    await replyLine(replyToken, [
+      textMessage(
+        `✅ ${todosToInsert.length}件をToDoに追加しました${reminderEnabled ? "（リマインドON）" : ""}`,
+      ),
+    ])
+    return
+  }
+
+  if (action === "todo_skip") {
+    await replyLine(replyToken, [textMessage("📝 記録のみ登録しました（ToDo追加なし）")])
+    return
+  }
+}
+
 // postback dataの値でフローを振り分ける（名前空間はファイル冒頭の定数を参照）。
 // 予定一括登録関連を先に判定してから、P3（pending_image_sessions）の分岐に進む。
 async function handlePostback(event: LineEvent): Promise<void> {
   const replyToken = event.replyToken as string
   const userId     = event.source.userId as string
   const data       = event.postback?.data as string | undefined
+
+  // ToDo確認フローのpostbackは `action=` から始まるクエリ文字列形式で、
+  // 他フローの固定文字列（例："book_register_start"）と衝突しない
+  if (data?.startsWith("action=")) {
+    await handleTodoAction(replyToken, data)
+    return
+  }
 
   if (data === BOOK_REGISTER_START) {
     await handleBookRegisterStart(replyToken, userId)
@@ -954,6 +1139,26 @@ async function handleText(event: LineEvent): Promise<void> {
   await handleChatQuestion(replyToken, question)
 }
 
+// ユーザーの初回インタラクション時に、通知設定（テスト期間デフォルト：毎日22時・全ON）を
+// 自動作成する。ignoreDuplicatesでON CONFLICT DO NOTHING相当にし、Web側で変更済みの設定は
+// 上書きしない。
+async function ensureNotificationSettings(userId: string): Promise<void> {
+  const { error } = await supabase
+    .from("notification_settings")
+    .upsert(
+      {
+        line_user_id:     userId,
+        frequency:        "daily",
+        send_time:        "22:00",
+        digest_enabled:   true,
+        reminder_enabled: true,
+        send_when_empty:  true,
+      },
+      { onConflict: "line_user_id", ignoreDuplicates: true },
+    )
+  if (error) console.error("[ensureNotificationSettings]", error)
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -974,6 +1179,9 @@ Deno.serve(async (req) => {
 
   // LINEは1リクエストに複数eventsをまとめて送ってくることがあるため全件並行処理する
   for (const event of events) {
+    const userId = event.source?.userId as string | undefined
+    if (userId) tasks.push(ensureNotificationSettings(userId))
+
     if (event.type === "message") {
       if (event.message?.type === "image") tasks.push(handleImage(event))
       else if (event.message?.type === "text") tasks.push(handleText(event))

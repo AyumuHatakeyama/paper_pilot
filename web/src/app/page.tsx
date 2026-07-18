@@ -4,29 +4,51 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { CalendarView } from '@/components/CalendarView'
 import { EventCard } from '@/components/EventCard'
-import { getActiveEvents } from '@/lib/supabase'
-import type { PrintEvent } from '@/types/print'
+import { TodoItem } from '@/components/TodoItem'
+import { getActiveEvents, getActiveTodos, updateTodoStatus } from '@/lib/supabase'
+import type { PrintEvent, Todo } from '@/types/print'
 
 export default function CalendarPage() {
   const [events, setEvents] = useState<PrintEvent[]>([])
+  const [todos, setTodos] = useState<Todo[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
 
   useEffect(() => {
-    getActiveEvents()
-      .then(setEvents)
+    Promise.all([getActiveEvents(), getActiveTodos()])
+      .then(([evs, tds]) => {
+        setEvents(evs)
+        setTodos(tds)
+      })
       .catch(console.error)
       .finally(() => setLoading(false))
   }, [])
 
+  async function handleToggleTodo(id: string, completed: boolean) {
+    await updateTodoStatus(id, completed)
+    // getActiveTodosは未完了のみを返す前提なので、完了にしたものは一覧から外す
+    setTodos(prev => prev.filter(t => t.id !== id))
+  }
+
   const selectedEvents = selectedDate
     ? events.filter(e => e.event_date === selectedDate)
+    : []
+  const selectedTodos = selectedDate
+    ? todos.filter(t => t.due_date === selectedDate)
     : []
 
   const upcoming = events
     .filter(e => {
       const days = Math.ceil((new Date(e.event_date).getTime() - Date.now()) / 86400000)
       return days >= 0 && days <= 14
+    })
+    .slice(0, 10)
+
+  const upcomingTodos = todos
+    .filter(t => {
+      if (!t.due_date) return false
+      const days = Math.ceil((new Date(t.due_date).getTime() - new Date().getTime()) / 86400000)
+      return days <= 14
     })
     .slice(0, 10)
 
@@ -51,6 +73,7 @@ export default function CalendarPage() {
         <>
           <CalendarView
             events={events}
+            todos={todos}
             selectedDate={selectedDate}
             onDayClick={date => setSelectedDate(prev => prev === date ? null : date)}
           />
@@ -69,10 +92,17 @@ export default function CalendarPage() {
                   ＋ 追加
                 </Link>
               </div>
-              {selectedEvents.length === 0 ? (
+              {selectedEvents.length === 0 && selectedTodos.length === 0 ? (
                 <p className="text-sm text-slate-400 text-center py-4">この日の予定・締切はありません</p>
               ) : (
-                selectedEvents.map(e => <EventCard key={e.id} event={e} showDate={false} />)
+                <>
+                  {selectedEvents.map(e => <EventCard key={e.id} event={e} showDate={false} />)}
+                  {selectedTodos.length > 0 && (
+                    <div className="bg-white rounded-xl p-4 shadow-sm divide-y divide-slate-50">
+                      {selectedTodos.map(t => <TodoItem key={t.id} todo={t} onToggle={handleToggleTodo} />)}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -90,6 +120,16 @@ export default function CalendarPage() {
               ) : (
                 upcoming.map(e => <EventCard key={e.id} event={e} />)
               )}
+            </div>
+          )}
+
+          {/* 直近のToDo */}
+          {!selectedDate && upcomingTodos.length > 0 && (
+            <div className="space-y-2">
+              <h2 className="text-sm font-semibold text-slate-600">✅ ToDo（期限が近い順）</h2>
+              <div className="bg-white rounded-xl p-4 shadow-sm divide-y divide-slate-50">
+                {upcomingTodos.map(t => <TodoItem key={t.id} todo={t} onToggle={handleToggleTodo} />)}
+              </div>
             </div>
           )}
 
